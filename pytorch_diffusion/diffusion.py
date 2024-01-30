@@ -53,7 +53,12 @@ def diffusion_step(x, t, *,
 
 def denoising_step(x, t, *,
                    model,
+                   first_step,
+                   num_time_steps,
+                   embT,
                    logvar,
+                   alphas,
+                   alpha_cum_prod,
                    sqrt_recip_alphas_cumprod,
                    sqrt_recipm1_alphas_cumprod,
                    posterior_mean_coef1,
@@ -64,8 +69,43 @@ def denoising_step(x, t, *,
     """
     # instead of using eq. (11) directly, follow original implementation which,
     # equivalently, predicts x_0 and uses it to compute mean of the posterior
-    # 1. predict eps via model
-    model_output = model(x, t)
+    # # 1. predict eps via model
+    # print(embT)
+    # print(alphas)
+    model_output = model(x, embT)
+    alphasTerm = extract(alphas, t, x.shape)
+    alpha_cum_prodTerm = extract(alpha_cum_prod, t, x.shape)
+
+    newSample = (x-0.5*(1-alphasTerm)*model_output/((1-alpha_cum_prodTerm)**0.5))/(alphasTerm**0.5)
+
+    # new ODE sampler
+
+    if first_step:
+        newAlpha = extract(alphas, t, x.shape)
+        newAlphaCumProd = extract(alpha_cum_prod, t, x.shape)
+        newTerm = torch.sqrt(newAlpha)*(x+0.5*(1-newAlpha)*model_output/((1-newAlphaCumProd)**0.5))
+        newembT = torch.tensor((t)*1000/num_time_steps, dtype=torch.int)
+        model_outputNew = model(newTerm, newembT)
+
+        term1 = torch.sqrt(1/alphasTerm)
+        term2 = x-0.5*(1-newAlpha)*model_output/((1-alpha_cum_prodTerm)**0.5)
+        term3 = 0.25*(1-alphasTerm)*(1-alphasTerm)/(1-newTerm)
+        term4 = -model_output/((1-alpha_cum_prodTerm)**0.5)+torch.sqrt(newAlpha)*model_outputNew/((1-newAlphaCumProd)**0.5)
+        newSample = term1*(term2+term3*term4)
+    else:
+        newAlpha = extract(alphas, t+1, x.shape)
+        newAlphaCumProd = extract(alpha_cum_prod, t+1, x.shape)
+        newTerm = torch.sqrt(newAlpha)*(x+0.5*(1-newAlpha)*model_output/((1-newAlphaCumProd)**0.5))
+        newembT = torch.tensor((t+1)*1000/num_time_steps, dtype=torch.int)
+        model_outputNew = model(newTerm, newembT)
+
+        term1 = torch.sqrt(1/alphasTerm)
+        term2 = x-0.5*(1-newAlpha)*model_output/((1-newAlphaCumProd)**0.5)
+        term3 = 0.25*(1-alphasTerm)*(1-alphasTerm)/(1-newTerm)
+        term4 = -model_output/((1-alpha_cum_prodTerm)**0.5)+torch.sqrt(newAlpha)*model_outputNew/((1-newAlphaCumProd)**0.5)
+        newSample = term1*(term2+term3*term4)
+    
+
     # 2. predict clipped x_0
     # (follows from x_t=sqrt_alpha_cumprod*x_0 + sqrt_one_minus_alpha*eps)
     pred_xstart = (extract(sqrt_recip_alphas_cumprod, t, x.shape)*x -
@@ -82,10 +122,11 @@ def denoising_step(x, t, *,
     mask = 1-(t==0).float()
     mask = mask.reshape((x.shape[0],)+(1,)*(len(x.shape)-1))
     sample = mean + mask*torch.exp(0.5*logvar)*noise
+    #newSample = newSample + mask*noise*((1/alphasTerm-1)**0.5)
     sample = sample.float()
     if return_pred_xstart:
         return sample, pred_xstart
-    return sample
+    return newSample
 
 
 class Diffusion(object):
@@ -118,6 +159,7 @@ class Diffusion(object):
         posterior_mean_coef2 = (1. - alphas_cumprod_prev) * np.sqrt(alphas) / (1. - alphas_cumprod)
 
         self.alphas = alphas
+        self.alphas_cumprod = alphas_cumprod
         self.sqrt_recip_alphas_cumprod = sqrt_recip_alphas_cumprod
         self.sqrt_recipm1_alphas_cumprod = sqrt_recipm1_alphas_cumprod
         self.posterior_mean_coef1 = posterior_mean_coef1
@@ -192,6 +234,7 @@ class Diffusion(object):
     def denoise(self, n, n_steps=None, x=None, curr_step=None,
                 progress_bar=lambda i, total=None: i,
                 callback=lambda x, i, x0=None: None):
+        
         with torch.no_grad():
             if curr_step is None:
                 curr_step = self.num_timesteps
@@ -206,19 +249,29 @@ class Diffusion(object):
                 # start the chain with x_T from normal distribution
                 x = torch.randn(n, self.model.in_channels, self.model.resolution, self.model.resolution)
                 x = x.to(self.device)
-
-            for i in progress_bar(reversed(range(curr_step-n_steps, curr_step)), total=n_steps):
-                t = (torch.ones(n)*i).to(self.device)
-                x, x0 = denoising_step(x,
-                                       t=t,
-                                       model=self.model,
-                                       logvar=self.logvar,
-                                       sqrt_recip_alphas_cumprod=self.sqrt_recip_alphas_cumprod,
-                                       sqrt_recipm1_alphas_cumprod=self.sqrt_recipm1_alphas_cumprod,
-                                       posterior_mean_coef1=self.posterior_mean_coef1,
-                                       posterior_mean_coef2=self.posterior_mean_coef2,
-                                       return_pred_xstart=True)
-                callback(x, i, x0=x0)
+                
+                first_step  = True
+                for i in progress_bar(reversed(range(curr_step-n_steps, curr_step)), total=n_steps):
+                    
+                    t = (torch.ones(n)*i).to(self.device)
+                    embT = torch.tensor(t*1000/self.num_timesteps, dtype=torch.int)
+                    
+                    x, x0 = denoising_step(x,
+                                        t=t,
+                                        model=self.model,
+                                        first_step=first_step,
+                                        num_time_steps=self.num_timesteps,
+                                        embT=embT, 
+                                        logvar=self.logvar,
+                                        alphas = self.alphas,
+                                        alpha_cum_prod = self.alphas_cumprod, 
+                                        sqrt_recip_alphas_cumprod=self.sqrt_recip_alphas_cumprod,
+                                        sqrt_recipm1_alphas_cumprod=self.sqrt_recipm1_alphas_cumprod,
+                                        posterior_mean_coef1=self.posterior_mean_coef1,
+                                        posterior_mean_coef2=self.posterior_mean_coef2,
+                                        return_pred_xstart=True)
+                    callback(x, i, x0=x0)
+                    first_step = False 
 
             return x
 
@@ -226,6 +279,7 @@ class Diffusion(object):
     def diffuse(self, n, n_steps=None, x=None, curr_step=None,
                 progress_bar=lambda i, total=None: i,
                 callback=lambda x, i: None):
+        
         with torch.no_grad():
             if curr_step is None:
                 curr_step = 0
@@ -274,6 +328,7 @@ if __name__ == "__main__":
     bs = int(sys.argv[2]) if len(sys.argv)>2 else 1
     nb = int(sys.argv[3]) if len(sys.argv)>3 else 1
     diffusion = Diffusion.from_pretrained(name)
+    name = "NewRounding/25K_samplesNewODE_1000"
     for ib in tqdm.tqdm(range(nb), desc="Batch"):
         x = diffusion.denoise(bs, progress_bar=tqdm.tqdm)
         idx = ib*bs
