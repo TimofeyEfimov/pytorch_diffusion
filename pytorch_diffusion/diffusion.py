@@ -80,31 +80,34 @@ def denoising_step(x, t, *,
 
     # new ODE sampler
 
-    if first_step:
-        newAlpha = extract(alphas, t, x.shape)
-        newAlphaCumProd = extract(alpha_cum_prod, t, x.shape)
-        newTerm = torch.sqrt(newAlpha)*(x+0.5*(1-newAlpha)*model_output/((1-newAlphaCumProd)**0.5))
-        newembT = torch.tensor((t)*1000/num_time_steps, dtype=torch.int)
-        model_outputNew = model(newTerm, newembT)
+    # if first_step:
+    #     newAlpha = extract(alphas, t, x.shape)
+    #     newAlphaCumProd = extract(alpha_cum_prod, t, x.shape)
+    #     newTerm = torch.sqrt(newAlpha)*(x+0.5*(1-newAlpha)*model_output/((1-newAlphaCumProd)**0.5))
+    #     newembT = torch.tensor((t)*1000/num_time_steps, dtype=torch.int)
+    #     model_outputNew = model(newTerm, newembT)
 
-        term1 = torch.sqrt(1/alphasTerm)
-        term2 = x-0.5*(1-newAlpha)*model_output/((1-alpha_cum_prodTerm)**0.5)
-        term3 = 0.25*(1-alphasTerm)*(1-alphasTerm)/(1-newTerm)
-        term4 = -model_output/((1-alpha_cum_prodTerm)**0.5)+torch.sqrt(newAlpha)*model_outputNew/((1-newAlphaCumProd)**0.5)
-        newSample = term1*(term2+term3*term4)
-    else:
-        newAlpha = extract(alphas, t+1, x.shape)
-        newAlphaCumProd = extract(alpha_cum_prod, t+1, x.shape)
-        newTerm = torch.sqrt(newAlpha)*(x+0.5*(1-newAlpha)*model_output/((1-newAlphaCumProd)**0.5))
-        newembT = torch.tensor((t+1)*1000/num_time_steps, dtype=torch.int)
-        model_outputNew = model(newTerm, newembT)
+    #     term1 = torch.sqrt(1/alphasTerm)
+    #     term2 = x-0.5*(1-newAlpha)*model_output/((1-alpha_cum_prodTerm)**0.5)
+    #     term3 = 0.25*(1-alphasTerm)*(1-alphasTerm)/(1-newTerm)
+    #     term4 = -model_output/((1-alpha_cum_prodTerm)**0.5)+torch.sqrt(newAlpha)*model_outputNew/((1-newAlphaCumProd)**0.5)
+    #     newSample = term1*(term2+term3*term4)
+    # else:
+    #     newAlpha = extract(alphas, t+1, x.shape)
+    #     newAlphaCumProd = extract(alpha_cum_prod, t+1, x.shape)
+    #     newTerm = torch.sqrt(newAlpha)*(x+0.5*(1-newAlpha)*model_output/((1-newAlphaCumProd)**0.5))
+    #     newembT = torch.tensor((t+1)*1000/num_time_steps, dtype=torch.int)
+    #     model_outputNew = model(newTerm, newembT)
 
-        term1 = torch.sqrt(1/alphasTerm)
-        term2 = x-0.5*(1-newAlpha)*model_output/((1-newAlphaCumProd)**0.5)
-        term3 = 0.25*(1-alphasTerm)*(1-alphasTerm)/(1-newTerm)
-        term4 = -model_output/((1-alpha_cum_prodTerm)**0.5)+torch.sqrt(newAlpha)*model_outputNew/((1-newAlphaCumProd)**0.5)
-        newSample = term1*(term2+term3*term4)
+    #     term1 = torch.sqrt(1/alphasTerm)
+    #     term2 = x-0.5*(1-newAlpha)*model_output/((1-newAlphaCumProd)**0.5)
+    #     term3 = 0.25*(1-alphasTerm)*(1-alphasTerm)/(1-newTerm)
+    #     term4 = -model_output/((1-alpha_cum_prodTerm)**0.5)+torch.sqrt(newAlpha)*model_outputNew/((1-newAlphaCumProd)**0.5)
+    #     newSample = term1*(term2+term3*term4)
     
+    # New SDE sampler
+
+    # newTerm = x-torch.sqrt((1-alphasTerm)*0.5)*
 
     # 2. predict clipped x_0
     # (follows from x_t=sqrt_alpha_cumprod*x_0 + sqrt_one_minus_alpha*eps)
@@ -119,9 +122,15 @@ def denoising_step(x, t, *,
 
     # sample - return mean for t==0
     noise = torch.randn_like(x)
+    second_noise = torch.randn_like(x)
     mask = 1-(t==0).float()
     mask = mask.reshape((x.shape[0],)+(1,)*(len(x.shape)-1))
     sample = mean + mask*torch.exp(0.5*logvar)*noise
+
+    newTerm = x+torch.sqrt((1-alphasTerm)*0.5)*mask*noise
+    newScore = model(newTerm, embT)
+    finalTerm = torch.sqrt(1/alphasTerm)*(newTerm-(1-alphasTerm)*newScore/((1-alpha_cum_prodTerm)**0.5)+torch.sqrt((1-alphasTerm)*0.5)*mask*second_noise)
+    newSample = finalTerm
     #newSample = newSample + mask*noise*((1/alphasTerm-1)**0.5)
     sample = sample.float()
     if return_pred_xstart:
@@ -207,7 +216,7 @@ class Diffusion(object):
             "beta_schedule": "linear",
             "beta_start": 0.0001,
             "beta_end": 0.02,
-            "num_diffusion_timesteps": 1000,
+            "num_diffusion_timesteps": 700,
         }
         model_var_type_map = {
             "cifar10": "fixedlarge",
@@ -328,7 +337,7 @@ if __name__ == "__main__":
     bs = int(sys.argv[2]) if len(sys.argv)>2 else 1
     nb = int(sys.argv[3]) if len(sys.argv)>3 else 1
     diffusion = Diffusion.from_pretrained(name)
-    name = "NewRounding/25K_samplesNewODE_1000"
+    name = "NewRounding/Test_samplesNewSDE_700"
     for ib in tqdm.tqdm(range(nb), desc="Batch"):
         x = diffusion.denoise(bs, progress_bar=tqdm.tqdm)
         idx = ib*bs
