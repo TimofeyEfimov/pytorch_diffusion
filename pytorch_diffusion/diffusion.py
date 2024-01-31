@@ -6,6 +6,7 @@ from pytorch_diffusion.ckpt_util import get_ckpt_path
 
 
 def get_beta_schedule(beta_schedule, *, beta_start, beta_end, num_diffusion_timesteps):
+    
     if beta_schedule == 'quad':
         betas = np.linspace(beta_start ** 0.5, beta_end ** 0.5, num_diffusion_timesteps, dtype=np.float64) ** 2
     elif beta_schedule == 'linear':
@@ -72,35 +73,36 @@ def denoising_step(x, t, *,
     # # 1. predict eps via model
     # print(embT)
     # print(alphas)
-    model_output = model(x,t)
+    model_output = 0
     alphasTerm = extract(alphas, t, x.shape)
     alpha_cum_prodTerm = extract(alpha_cum_prod, t, x.shape)
 
-    newSample = (x-(1-alphasTerm)*model_output/((1-alpha_cum_prodTerm)**0.5))/(alphasTerm**0.5)
+    #newSample = (x-0.5*(1-alphasTerm)*model_output/((1-alpha_cum_prodTerm)**0.5))/(alphasTerm**0.5)
 
     # new ODE sampler
 
     # if first_step:
-    #     newAlpha = extract(alphas, t, x.shape)
-    #     newAlphaCumProd = extract(alpha_cum_prod, t, x.shape)
-    #     newTerm = torch.sqrt(newAlpha)*(x+0.5*(1-newAlpha)*model_output/((1-newAlphaCumProd)**0.5))
-    #     newembT = torch.tensor((t)*1000/num_time_steps, dtype=torch.int)
-    #     model_outputNew = model(newTerm, newembT)
+    #     # newAlpha = extract(alphas, t, x.shape)
+    #     # newAlphaCumProd = extract(alpha_cum_prod, t, x.shape)
+    #     # newTerm = torch.sqrt(newAlpha)*(x+0.5*(1-newAlpha)*model_output/((1-newAlphaCumProd)**0.5))
+    #     # newembT = torch.tensor((t)*1000/num_time_steps, dtype=torch.int)
+    #     # model_outputNew = model(newTerm, newembT)
 
-    #     term1 = torch.sqrt(1/alphasTerm)
-    #     term2 = x-0.5*(1-newAlpha)*model_output/((1-alpha_cum_prodTerm)**0.5)
-    #     term3 = 0.25*(1-alphasTerm)*(1-alphasTerm)/(1-newTerm)
-    #     term4 = -model_output/((1-alpha_cum_prodTerm)**0.5)+torch.sqrt(newAlpha)*model_outputNew/((1-newAlphaCumProd)**0.5)
-    #     newSample = term1*(term2+term3*term4)
+    #     # term1 = torch.sqrt(1/alphasTerm)
+    #     # term2 = x-0.5*(1-newAlpha)*model_output/((1-alpha_cum_prodTerm)**0.5)
+    #     # term3 = 0.25*(1-alphasTerm)*(1-alphasTerm)/(1-newTerm)
+    #     # term4 = -model_output/((1-alpha_cum_prodTerm)**0.5)+torch.sqrt(newAlpha)*model_outputNew/((1-newAlphaCumProd)**0.5)
+    #     # newSample = term1*(term2+term3*term4)
+    #     newSample = (x-0.5*(1-alphasTerm)*model_output/((1-alpha_cum_prodTerm)**0.5))/(alphasTerm**0.5)
     # else:
     #     newAlpha = extract(alphas, t+1, x.shape)
     #     newAlphaCumProd = extract(alpha_cum_prod, t+1, x.shape)
-    #     newTerm = torch.sqrt(newAlpha)*(x+0.5*(1-newAlpha)*model_output/((1-newAlphaCumProd)**0.5))
-    #     newembT = torch.tensor((t+1)*1000/num_time_steps, dtype=torch.int)
+    #     newTerm = torch.sqrt(newAlpha)*(x+0.5*(1-newAlpha)*model_output/((1-alpha_cum_prodTerm)**0.5))
+    #     newembT = ((t+1)*1000/num_time_steps).clone().detach().to(dtype=torch.int)
     #     model_outputNew = model(newTerm, newembT)
 
     #     term1 = torch.sqrt(1/alphasTerm)
-    #     term2 = x-0.5*(1-newAlpha)*model_output/((1-newAlphaCumProd)**0.5)
+    #     term2 = x-0.5*(1-alphasTerm)*model_output/((1-alpha_cum_prodTerm)**0.5)
     #     term3 = 0.25*(1-alphasTerm)*(1-alphasTerm)/(1-newTerm)
     #     term4 = -model_output/((1-alpha_cum_prodTerm)**0.5)+torch.sqrt(newAlpha)*model_outputNew/((1-newAlphaCumProd)**0.5)
     #     newSample = term1*(term2+term3*term4)
@@ -127,11 +129,11 @@ def denoising_step(x, t, *,
     mask = mask.reshape((x.shape[0],)+(1,)*(len(x.shape)-1))
     sample = mean + mask*torch.exp(0.5*logvar)*noise
 
-    # newTerm = x+torch.sqrt((1-alphasTerm)*0.5)*mask*noise
-    # newScore = model(newTerm, embT)
-    # finalTerm = torch.sqrt(1/alphasTerm)*(newTerm-(1-alphasTerm)*newScore/((1-alpha_cum_prodTerm)**0.5)+torch.sqrt((1-alphasTerm)*0.5)*mask*second_noise)
-    # newSample = finalTerm
-    newSample = newSample + mask*noise*((1/alphasTerm-1)**0.5)
+    newTerm = x+torch.sqrt((1-alphasTerm)*0.5)*mask*noise
+    newScore = model(newTerm, embT)
+    finalTerm = torch.sqrt(1/alphasTerm)*(newTerm-(1-alphasTerm)*newScore/((1-alpha_cum_prodTerm)**0.5)+torch.sqrt((1-alphasTerm)*0.5)*mask*second_noise)
+    newSample = finalTerm
+    # newSample = newSample + mask*noise*((1/alphasTerm-1)**0.5)
     sample = sample.float()
 
     if return_pred_xstart:
@@ -217,7 +219,7 @@ class Diffusion(object):
             "beta_schedule": "linear",
             "beta_start": 0.0001,
             "beta_end": 0.02,
-            "num_diffusion_timesteps": 1000,
+            "num_diffusion_timesteps": 900,
         }
         model_var_type_map = {
             "cifar10": "fixedlarge",
@@ -264,7 +266,8 @@ class Diffusion(object):
                 for i in progress_bar(reversed(range(curr_step-n_steps, curr_step)), total=n_steps):
                     
                     t = (torch.ones(n)*i).to(self.device)
-                    embT = torch.tensor(t*1000/self.num_timesteps, dtype=torch.int)
+                    embT = ((t)*1000/self.num_timesteps).clone().detach().to(dtype=torch.int)
+
                     
                     x = denoising_step(x,
                                         t=t,
@@ -338,8 +341,9 @@ if __name__ == "__main__":
     bs = int(sys.argv[2]) if len(sys.argv)>2 else 1
     nb = int(sys.argv[3]) if len(sys.argv)>3 else 1
     diffusion = Diffusion.from_pretrained(name)
-    name = "NEW/Test_samplesVanillaSDE_1000"
+    name = "FINAL_NEWT/10K_VanillaODE_900"
     for ib in tqdm.tqdm(range(nb), desc="Batch"):
         x = diffusion.denoise(bs, progress_bar=tqdm.tqdm)
         idx = ib*bs
         diffusion.save(x, "results/"+name+"/{:06}.png", start_idx=idx)
+
