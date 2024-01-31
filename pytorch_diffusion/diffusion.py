@@ -72,7 +72,7 @@ def denoising_step(x, t, *,
     # # 1. predict eps via model
     # print(embT)
     # print(alphas)
-    model_output = model(x, embT)
+    model_output = 0
     alphasTerm = extract(alphas, t, x.shape)
     alpha_cum_prodTerm = extract(alpha_cum_prod, t, x.shape)
 
@@ -133,6 +133,7 @@ def denoising_step(x, t, *,
     newSample = finalTerm
     #newSample = newSample + mask*noise*((1/alphasTerm-1)**0.5)
     sample = sample.float()
+
     if return_pred_xstart:
         return sample, pred_xstart
     return newSample
@@ -265,7 +266,7 @@ class Diffusion(object):
                     t = (torch.ones(n)*i).to(self.device)
                     embT = torch.tensor(t*1000/self.num_timesteps, dtype=torch.int)
                     
-                    x, x0 = denoising_step(x,
+                    x = denoising_step(x,
                                         t=t,
                                         model=self.model,
                                         first_step=first_step,
@@ -278,8 +279,8 @@ class Diffusion(object):
                                         sqrt_recipm1_alphas_cumprod=self.sqrt_recipm1_alphas_cumprod,
                                         posterior_mean_coef1=self.posterior_mean_coef1,
                                         posterior_mean_coef2=self.posterior_mean_coef2,
-                                        return_pred_xstart=True)
-                    callback(x, i, x0=x0)
+                                        return_pred_xstart=False)
+                    callback(x, i)
                     first_step = False 
 
             return x
@@ -337,7 +338,7 @@ if __name__ == "__main__":
     bs = int(sys.argv[2]) if len(sys.argv)>2 else 1
     nb = int(sys.argv[3]) if len(sys.argv)>3 else 1
     diffusion = Diffusion.from_pretrained(name)
-    name = "NewRounding/Test_samplesNewSDE_700"
+    name = "NEW/10K_samplesNewSDE_700"
     for ib in tqdm.tqdm(range(nb), desc="Batch"):
         x = diffusion.denoise(bs, progress_bar=tqdm.tqdm)
         idx = ib*bs
